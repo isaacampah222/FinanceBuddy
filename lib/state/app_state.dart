@@ -7,12 +7,19 @@ import '../models/category.dart';
 import '../models/ledger_transaction.dart';
 import '../models/review_item.dart';
 import '../models/routing_rule.dart';
+import '../models/parsed_sms.dart';
+import '../services/notification_source.dart';
+import '../services/sms_source.dart';
+import '../services/transaction_parser.dart';
 import '../services/sms_scanner.dart';
 
 class AppState extends ChangeNotifier {
   AppState(this._database, this._scanner);
   final AppDatabase _database;
   final SmsScanner _scanner;
+  final notifications = NotificationSource();
+  bool notificationsEnabled = false;
+  bool _readingNotifications = false;
 
   List<Account> accounts = const [];
   List<Category> categories = const [];
@@ -25,12 +32,13 @@ class AppState extends ChangeNotifier {
   String? error;
   ScanResult? lastScan;
 
-  double get netWorth =>
+  double get totalBalance =>
       accounts.fold(0, (sum, account) => sum + account.balance);
 
   Future<void> initialize() async {
     try {
       await refresh();
+      notificationsEnabled = await notifications.enabled();
       permissionPermanentlyDenied = await Permission.sms.isPermanentlyDenied;
     } catch (e) {
       error = 'Could not open local storage: $e';
@@ -85,19 +93,84 @@ class AppState extends ChangeNotifier {
     await refresh();
   }
 
+  Future<void> addAccount(
+      {required String name,
+      required String kind,
+      required double openingBalance}) async {
+    await _database.addAccount(
+        name: name, kind: kind, openingBalance: openingBalance);
+    await refresh();
+  }
+
+  ParsedSms? suggestion(ReviewItem item) => TransactionParser().parse(
+      DeviceSms(
+          id: item.smsHash,
+          sender: item.sender,
+          body: item.body,
+          date: item.receivedAt),
+      rules,
+      requireRoute: false);
+
+  Future<void> confirmReview(ReviewItem item,
+      {required int accountId,
+      int? categoryId,
+      required double amount,
+      required TransactionDirection direction,
+      required String note,
+      required DateTime occurredAt}) async {
+    await _database.promoteReview(
+        item,
+        ParsedSms(
+            amount: amount,
+            currency: 'GHS',
+            direction: direction,
+            counterparty: note,
+            occurredAt: occurredAt,
+            accountId: accountId,
+            categoryId: categoryId,
+            reference: suggestion(item)?.reference));
+    await refresh();
+  }
+
+  Future<void> setNotificationDetection(bool enabled) async {
+    await notifications.setEnabled(enabled);
+    notificationsEnabled = await notifications.enabled();
+    notifyListeners();
+  }
+
+  Future<void> readNotifications() async {
+    if (_readingNotifications || loading) return;
+    _readingNotifications = true;
+    try {
+      notificationsEnabled = await notifications.enabled();
+      final pending = await notifications.pending();
+      for (final message in pending) {
+        await _scanner.queueMessage(message);
+        await notifications.acknowledge(message.id);
+      }
+      if (pending.isNotEmpty) await refresh();
+    } catch (_) {
+      error = 'Could not read transaction alerts. They will be retried.';
+    } finally {
+      _readingNotifications = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> addManual(
       {required int accountId,
       int? categoryId,
       required double amount,
       required TransactionDirection direction,
-      required String note}) async {
+      required String note,
+      DateTime? occurredAt}) async {
     await _database.addManual(
         accountId: accountId,
         categoryId: categoryId,
         amount: amount,
         direction: direction,
         note: note,
-        occurredAt: DateTime.now());
+        occurredAt: occurredAt ?? DateTime.now());
     await refresh();
   }
 
@@ -123,7 +196,6 @@ class AppState extends ChangeNotifier {
         minAmount: minAmount,
         maxAmount: maxAmount,
         priority: priority);
-    await _scanner.applyRulesToReviews();
     await refresh();
     return created;
   }

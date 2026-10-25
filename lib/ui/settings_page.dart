@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../models/ledger_transaction.dart';
 import '../state/app_state.dart';
@@ -10,12 +11,58 @@ class SettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     return CustomScrollView(slivers: [
-      SliverAppBar.large(title: const Text('Routing rules')),
+      SliverAppBar.large(title: const Text('Settings')),
       SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
           sliver: SliverList.list(children: [
+            SwitchListTile(
+              title: const Text('Detect transaction notifications'),
+              subtitle: const Text(
+                  'Read new SMS and banking notifications on this Android device. You confirm each suggestion before it changes a balance.'),
+              value: state.notificationsEnabled,
+              onChanged: state.notifications.supported
+                  ? (enabled) async {
+                      try {
+                        if (enabled) {
+                          if (!context.mounted) return;
+                          final proceed = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                    title: const Text(
+                                        'Enable transaction suggestions?'),
+                                    content: const Text(
+                                        'Android notification access can expose notifications from all apps. Finance Buddy filters for financial messages and keeps suggestions on this device. Enable Finance Buddy on the next screen. Background reminders also need notification permission.'),
+                                    actions: [
+                                      TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context, false),
+                                          child: const Text('Cancel')),
+                                      FilledButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context, true),
+                                          child: const Text('Continue'))
+                                    ],
+                                  ));
+                          if (proceed != true) return;
+                          await Permission.notification.request();
+                        }
+                        await state.setNotificationDetection(enabled);
+                      } catch (_) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                              content: Text(
+                                  'Could not open notification settings. Try again.')));
+                        }
+                      }
+                    }
+                  : null,
+            ),
+            const SizedBox(height: 20),
+            Text('Account suggestions',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
             const Text(
-                'Combine sender, required and excluded keywords, transaction type, currency, and amount range. Higher priority rules win.'),
+                'Rules preselect an account and category in the confirmation form. Combine sender, keywords, type, currency, and amount range. Higher priority rules win. You always confirm before saving.'),
             const SizedBox(height: 16),
             FilledButton.icon(
                 onPressed: state.accounts.isEmpty
@@ -225,7 +272,9 @@ class SettingsPage extends StatelessWidget {
                         onPressed: () {
                           if (sender.text.trim().isEmpty &&
                               required.text.trim().isEmpty &&
-                              direction == null) return;
+                              direction == null) {
+                            return;
+                          }
                           Navigator.pop(context, (
                             sender: sender.text,
                             requiredKeywords: required.text,

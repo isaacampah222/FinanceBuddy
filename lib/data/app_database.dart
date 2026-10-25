@@ -102,6 +102,24 @@ class AppDatabase {
       (await (await database).query('accounts', orderBy: 'id'))
           .map(Account.fromMap)
           .toList();
+
+  Future<void> addAccount(
+      {required String name,
+      required String kind,
+      required double openingBalance}) async {
+    if (name.trim().isEmpty ||
+        !openingBalance.isFinite ||
+        !['bank', 'momo', 'cash', 'savings', 'other'].contains(kind)) {
+      throw ArgumentError('Enter a name, account type, and valid balance.');
+    }
+    await (await database).insert('accounts', {
+      'name': name.trim(),
+      'kind': kind,
+      'balance': openingBalance,
+      'currency': 'GHS',
+    });
+  }
+
   Future<List<Category>> categories() async =>
       (await (await database).query('categories', orderBy: 'name'))
           .map(Category.fromMap)
@@ -213,6 +231,8 @@ class AppDatabase {
   Future<bool> promoteReview(ReviewItem item, ParsedSms parsed) async {
     final db = await database;
     return db.transaction((txn) async {
+      await _validateTransaction(
+          txn, parsed.accountId!, parsed.amount, parsed.currency);
       final exists = await txn.query('review_items',
           columns: ['id'], where: 'id=?', whereArgs: [item.id], limit: 1);
       if (exists.isEmpty) return false;
@@ -262,9 +282,23 @@ class AppDatabase {
     });
   }
 
-  Future<void> setBalance(int accountId, double balance) async =>
-      (await database).update('accounts', {'balance': balance},
-          where: 'id=?', whereArgs: [accountId]);
+  Future<void> setBalance(int accountId, double balance) async {
+    if (!balance.isFinite) throw ArgumentError('Enter a valid balance.');
+    await (await database).update('accounts', {'balance': balance},
+        where: 'id=?', whereArgs: [accountId]);
+  }
+
+  Future<void> _validateTransaction(DatabaseExecutor db, int accountId,
+      double amount, String currency) async {
+    if (!amount.isFinite || amount <= 0) {
+      throw ArgumentError('Enter a positive amount.');
+    }
+    final rows =
+        await db.query('accounts', where: 'id=?', whereArgs: [accountId]);
+    if (rows.isEmpty || rows.first['currency'] != currency) {
+      throw ArgumentError('The transaction currency must match the account.');
+    }
+  }
 
   Future<void> addManual(
       {required int accountId,
@@ -275,6 +309,7 @@ class AppDatabase {
       required DateTime occurredAt}) async {
     final db = await database;
     await db.transaction((txn) async {
+      await _validateTransaction(txn, accountId, amount, 'GHS');
       await txn.insert('transactions', {
         'account_id': accountId,
         'category_id': categoryId,

@@ -3,7 +3,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../models/account.dart';
-import '../models/ledger_transaction.dart';
+import 'account_dialog.dart';
+import 'transaction_dialog.dart';
 import '../state/app_state.dart';
 import 'account_transactions_page.dart';
 import 'formatters.dart';
@@ -21,13 +22,13 @@ class DashboardPage extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
         children: [
-          Text('Finance Buddy',
+          Text('Your money',
               style: Theme.of(context)
                   .textTheme
                   .headlineSmall
                   ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          const Text('Your money, privately tracked on this device.'),
+          const Text('Every account. Every income. Every expense.'),
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(24),
@@ -37,10 +38,10 @@ class DashboardPage extends StatelessWidget {
                 borderRadius: BorderRadius.circular(24)),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('TOTAL NET WORTH',
+              const Text('TOTAL BALANCE',
                   style: TextStyle(color: Colors.white70, letterSpacing: 1.2)),
               const SizedBox(height: 8),
-              Text(moneyFormat.format(state.netWorth),
+              Text(moneyFormat.format(state.totalBalance),
                   style: const TextStyle(
                       color: Colors.white,
                       fontSize: 30,
@@ -68,11 +69,16 @@ class DashboardPage extends StatelessWidget {
                     .titleLarge
                     ?.copyWith(fontWeight: FontWeight.bold)),
             TextButton.icon(
-                onPressed: () => _manualDialog(context, state),
+                onPressed: () => showTransactionDialog(context),
                 icon: const Icon(Icons.add),
-                label: const Text('Manual entry')),
+                label: const Text('Add transaction')),
           ]),
           const SizedBox(height: 10),
+          OutlinedButton.icon(
+              onPressed: () => showAccountDialog(context),
+              icon: const Icon(Icons.add_card),
+              label: const Text('Create account')),
+          const SizedBox(height: 12),
           ...state.accounts.map((account) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: _AccountCard(account: account))),
@@ -86,14 +92,15 @@ class DashboardPage extends StatelessWidget {
                 : const Icon(Icons.sync),
             label: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                child: Text(
-                    state.scanning ? 'Scanning locally…' : 'Scan SMS & Sync')),
+                child: Text(state.scanning
+                    ? 'Checking messages…'
+                    : 'Find transactions in SMS')),
           ),
           if (state.lastScan != null)
             Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Text(
-                    '${state.lastScan!.imported} imported • ${state.lastScan!.duplicates} already synced',
+                    '${state.lastScan!.reviewed} new suggestion(s) to review',
                     textAlign: TextAlign.center)),
           if (state.error != null)
             Padding(
@@ -109,7 +116,7 @@ class DashboardPage extends StatelessWidget {
                     title: Text(
                         '${state.reviewItems.length} message(s) need review'),
                     subtitle: const Text(
-                        'Financial messages that did not match your rules'),
+                        'Confirm the account and details before saving'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => Navigator.push(
                         context,
@@ -130,7 +137,7 @@ class DashboardPage extends StatelessWidget {
               builder: (context) => AlertDialog(
                       title: const Text('Read transaction messages?'),
                       content: const Text(
-                          'Finance Buddy reads your SMS inbox only when you tap sync. Messages and transaction data never leave this device.'),
+                          'This optional scan reads up to 1,000 inbox messages and adds possible transactions for you to review. Nothing is saved to your balances automatically. Avoid recording a payment twice if you already received a notification suggestion.'),
                       actions: [
                         TextButton(
                             onPressed: () => Navigator.pop(context, false),
@@ -144,106 +151,20 @@ class DashboardPage extends StatelessWidget {
       status = await state.requestSmsPermission();
     }
     if (!status.isGranted) {
-      if (context.mounted)
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(status.isPermanentlyDenied
                 ? 'SMS permission is disabled in Settings.'
                 : 'SMS permission is required to sync.')));
+      }
       return;
     }
     final result = await state.scan();
-    if (context.mounted && result != null)
+    if (context.mounted && result != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-              'Synced ${result.imported} transaction(s); ${result.reviewed} need review.')));
-  }
-
-  Future<void> _manualDialog(BuildContext context, AppState state) async {
-    if (state.accounts.isEmpty) return;
-    var accountId = state.accounts.first.id;
-    int? categoryId;
-    var direction = TransactionDirection.debit;
-    final amount = TextEditingController();
-    final note = TextEditingController();
-    await showDialog<void>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-            builder: (context, setModalState) => AlertDialog(
-                  title: const Text('Manual transaction'),
-                  content: SingleChildScrollView(
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    DropdownButtonFormField<int>(
-                        initialValue: accountId,
-                        decoration: const InputDecoration(labelText: 'Account'),
-                        items: state.accounts
-                            .map((a) => DropdownMenuItem(
-                                value: a.id, child: Text(a.name)))
-                            .toList(),
-                        onChanged: (v) => setModalState(() => accountId = v!)),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<int?>(
-                        initialValue: categoryId,
-                        decoration:
-                            const InputDecoration(labelText: 'Category'),
-                        items: [
-                          const DropdownMenuItem(
-                              value: null, child: Text('Uncategorized')),
-                          ...state.categories.map((c) => DropdownMenuItem(
-                              value: c.id, child: Text(c.name)))
-                        ],
-                        onChanged: (v) => setModalState(() => categoryId = v)),
-                    const SizedBox(height: 12),
-                    SegmentedButton<TransactionDirection>(
-                        segments: const [
-                          ButtonSegment(
-                              value: TransactionDirection.debit,
-                              label: Text('Expense')),
-                          ButtonSegment(
-                              value: TransactionDirection.credit,
-                              label: Text('Income'))
-                        ],
-                        selected: {
-                          direction
-                        },
-                        onSelectionChanged: (v) =>
-                            setModalState(() => direction = v.first)),
-                    const SizedBox(height: 12),
-                    TextField(
-                        controller: amount,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration:
-                            const InputDecoration(labelText: 'Amount (GHS)')),
-                    const SizedBox(height: 12),
-                    TextField(
-                        controller: note,
-                        decoration: const InputDecoration(
-                            labelText: 'Note / counterparty')),
-                  ])),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('CANCEL')),
-                    FilledButton(
-                        onPressed: () async {
-                          final value = double.tryParse(amount.text);
-                          if (value == null || value <= 0) return;
-                          await state.addManual(
-                              accountId: accountId,
-                              categoryId: categoryId,
-                              amount: value,
-                              direction: direction,
-                              note: note.text.trim().isEmpty
-                                  ? 'Manual transaction'
-                                  : note.text.trim());
-                          if (context.mounted) Navigator.pop(context);
-                        },
-                        child: const Text('SAVE'))
-                  ],
-                )));
-    await WidgetsBinding.instance.endOfFrame;
-    amount.dispose();
-    note.dispose();
+          content:
+              Text('Found ${result.reviewed} new transaction suggestion(s).')));
+    }
   }
 }
 
@@ -296,7 +217,7 @@ class _AccountCard extends StatelessWidget {
                   FilledButton(
                       onPressed: () async {
                         final value = double.tryParse(controller.text);
-                        if (value == null) return;
+                        if (value == null || !value.isFinite) return;
                         await context
                             .read<AppState>()
                             .setBalance(account.id, value);

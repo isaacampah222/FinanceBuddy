@@ -5,6 +5,7 @@ import '../models/account.dart';
 import '../models/ledger_transaction.dart';
 import '../state/app_state.dart';
 import 'formatters.dart';
+import 'transaction_dialog.dart';
 
 class AccountTransactionsPage extends StatelessWidget {
   const AccountTransactionsPage({super.key, required this.account});
@@ -22,6 +23,11 @@ class AccountTransactionsPage extends StatelessWidget {
         .toList();
     return Scaffold(
       appBar: AppBar(title: Text(currentAccount.name)),
+      floatingActionButton: FloatingActionButton.extended(
+          onPressed: () =>
+              showTransactionDialog(context, accountId: account.id),
+          icon: const Icon(Icons.add),
+          label: const Text('Add transaction')),
       body: CustomScrollView(slivers: [
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),

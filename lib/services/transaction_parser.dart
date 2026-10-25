@@ -45,7 +45,11 @@ class TransactionParser {
       caseSensitive: false);
 
   ParsedSms? parse(DeviceSms sms, List<RoutingRule> rules,
-      {TransactionDirection? directionHint}) {
+      {TransactionDirection? directionHint, bool requireRoute = true}) {
+    if (_nonTransactionPattern.hasMatch(sms.body) ||
+        _authorizationPattern.hasMatch(sms.body)) {
+      return null;
+    }
     final inferredDirection = _direction(sms.body);
     final direction = inferredDirection ?? directionHint;
     if (direction == null || _nonMoneyCredit.hasMatch(sms.body)) return null;
@@ -53,7 +57,7 @@ class TransactionParser {
     if (amountMatch == null) return null;
     final amount =
         double.tryParse(amountMatch.amount.replaceAll(RegExp(r'[ ,]'), ''));
-    if (amount == null || amount <= 0) return null;
+    if (amount == null || !amount.isFinite || amount <= 0) return null;
     final currency = _currency(amountMatch.currency);
     final route = _route(sms, rules,
         direction: direction,
@@ -61,7 +65,7 @@ class TransactionParser {
         currency: currency,
         requireExplicitDirection:
             inferredDirection == null && directionHint != null);
-    if (route == null) return null;
+    if (requireRoute && route == null) return null;
 
     return ParsedSms(
       amount: amount,
@@ -76,8 +80,8 @@ class TransactionParser {
       reference: _leadingIdPattern.firstMatch(sms.body)?.group(1) ??
           _referencePattern.firstMatch(sms.body)?.group(1),
       occurredAt: sms.date,
-      accountId: route.accountId,
-      categoryId: route.categoryId,
+      accountId: route?.accountId,
+      categoryId: route?.categoryId,
     );
   }
 
@@ -126,14 +130,20 @@ class TransactionParser {
       if ((direction == TransactionDirection.debit
               ? _debitPattern
               : _creditPattern)
-          .hasMatch(context)) score += 8;
+          .hasMatch(context)) {
+        score += 8;
+      }
       if (RegExp(r'\b(?:balance|fee|charge|levy|limit|eligible|bonus)\b',
               caseSensitive: false)
-          .hasMatch(context)) score -= 5;
+          .hasMatch(context)) {
+        score -= 5;
+      }
       if (RegExp(
               r'\b(?:sent|received|withdrawn|debited|credited|paid|bought|purchased|deducted)\b',
               caseSensitive: false)
-          .hasMatch(context)) score += 4;
+          .hasMatch(context)) {
+        score += 4;
+      }
       if (score > bestScore) {
         bestScore = score;
         best = _AmountMatch(match.group(2)!, currency);
@@ -155,11 +165,14 @@ class TransactionParser {
       if (requireExplicitDirection && rule.direction == null) continue;
       if (!_matchesAny(sender, rule.effectiveSenderPattern)) continue;
       if (!_matchesAll(body, rule.effectiveRequiredKeywords)) continue;
-      if (_matchesAny(body, rule.excludedKeywords, emptyMatches: false))
+      if (_matchesAny(body, rule.excludedKeywords, emptyMatches: false)) {
         continue;
+      }
       if (rule.direction != null && rule.direction != direction) continue;
       if (rule.currency?.isNotEmpty == true &&
-          rule.currency!.toUpperCase() != currency) continue;
+          rule.currency!.toUpperCase() != currency) {
+        continue;
+      }
       if (rule.minAmount != null && amount < rule.minAmount!) continue;
       if (rule.maxAmount != null && amount > rule.maxAmount!) continue;
       return rule;
@@ -189,8 +202,9 @@ class TransactionParser {
   TransactionDirection? _direction(String body) {
     final debit = _debitPattern.hasMatch(body);
     final credit = _creditPattern.hasMatch(body);
-    if (debit == credit)
+    if (debit == credit) {
       return null; // Ambiguous messages go to review instead of being misclassified.
+    }
     return debit ? TransactionDirection.debit : TransactionDirection.credit;
   }
 
